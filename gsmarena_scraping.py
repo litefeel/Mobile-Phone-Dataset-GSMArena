@@ -1,9 +1,12 @@
+
+from urllib.parse import quote_plus, urlencode
 import requests
 from bs4 import BeautifulSoup
 import csv
 import os
 import time
 import json
+from litefeel.pycommon.io import read_lines
 
 # Class gsmarena scrap the website phones models and its devices and save to csv file individually.
 class Gsmarena():
@@ -16,14 +19,15 @@ class Gsmarena():
         self.phones_brands = []
         self.url = 'https://www.gsmarena.com/' # GSMArena website url
         self.new_folder_name = 'GSMArenaDataset' # Folder name on which files going to save.
-        self.absolute_path = os.popen('pwd').read().strip() + '/' + self.new_folder_name  # It create the absolute path of the GSMArenaDataset folder.
+        self.absolute_path = os.path.abspath('.') + '/' + self.new_folder_name  # It create the absolute path of the GSMArenaDataset folder.
 
     # This function crawl the html code of the requested URL.
     def crawl_html_page(self, sub_url):
 
         url = self.url + sub_url  # Url for html content parsing.
+        print(url)
         header={"User-Agent":"#user agent of your system  "}
-        time.sleep(30)  #SO that your IP does not gets blocked by the website
+        time.sleep(6)  #SO that your IP does not gets blocked by the website
         # Handing the connection error of the url.
         try:
             page = requests.get(url,timeout= 5, headers=header)
@@ -42,13 +46,26 @@ class Gsmarena():
     def crawl_phone_brands(self):
         phones_brands = []
         soup = self.crawl_html_page('makers.php3')
-        table = soup.find_all('table')[0]
+        tables = soup.find_all('table')
+        if len(tables) == 0:
+            return None
+        table = tables[0]
         table_a = table.find_all('a')
         for a in table_a:
             temp = [a['href'].split('-')[0], a.find('span').text.split(' ')[0], a['href']]
             phones_brands.append(temp)
         return phones_brands
 
+    # This function crawl mobile phones brands models links and return the list of the links.
+    def crawl_search_results(self, search_key):
+        links = []
+        soup = self.crawl_html_page("res.php3?sSearch=" + quote_plus(search_key))
+        data = soup.find(class_='section-body')
+        if data:
+            for line1 in data.findAll('a'):
+                links.append(line1['href'])
+
+        return links
     # This function crawl mobile phones brands models links and return the list of the links.
     def crawl_phones_models(self, phone_brand_link):
         links = []
@@ -74,7 +91,10 @@ class Gsmarena():
     def crawl_phones_models_specification(self, link, phone_brand):
         phone_data = {}
         soup = self.crawl_html_page(link)
-        model_name = soup.find(class_='specs-phone-name-title').text
+        ele = soup.find(class_='specs-phone-name-title')
+        if ele is None:
+            return None
+        model_name = ele.text
         model_img_html = soup.find(class_='specs-photo-main')
         model_img = model_img_html.find('img')['src']
         phone_data.update({"Brand": phone_brand})
@@ -119,6 +139,8 @@ class Gsmarena():
     # This function save the devices specification to csv file.
     def save_specification_to_file(self):
         phone_brand = self.crawl_phone_brands()
+        if phone_brand is None:
+            return
         self.create_folder()
         files_list = self.check_file_exists()
         for brand in phone_brand:
@@ -129,6 +151,8 @@ class Gsmarena():
                 print("Working on", brand[0].title(), "brand.")
                 for value in link:
                     datum = self.crawl_phones_models_specification(value, brand[0])
+                    if datum is None:
+                        continue
                     datum = { k:v.replace('\n', ' ').replace('\r', ' ') for k,v in datum.items() }
                     phones_data.append(datum)
                     print("Completed ", model_value, "/", len(link))
@@ -146,12 +170,48 @@ class Gsmarena():
                 print(brand[0].title() + '.csv file already in your directory.')
 
 
+
+    # This function save the devices specification to csv file.
+    def search_and_save(self):
+
+        keywords = set(read_lines("test.txt"))
+        keywords.discard("")
+        keywords.discard(None)
+
+        links = set()
+        for keyword in keywords:
+            links |= set(self.crawl_search_results(keyword))
+
+        
+        self.create_folder()
+        files_list = self.check_file_exists()
+        phones_data = []
+        model_value = 0
+
+        for value in links:
+            datum = self.crawl_phones_models_specification(value, "search")
+            if datum is None:
+                continue
+            datum = { k:v.replace('\n', ' ').replace('\r', ' ') for k,v in datum.items() }
+            phones_data.append(datum)
+            print("Completed ", model_value, "/", len(links))
+            model_value += 1
+        with open(self.absolute_path + '/' + "search" + ".csv", "w")  as file:
+            dict_writer = csv.DictWriter(file, fieldnames=self.features)
+            dict_writer.writeheader()
+            str_phones_data = json.dumps(phones_data)
+            encoded = str_phones_data.encode('utf-8')
+            load_list = json.loads(encoded)
+            for dicti in load_list:
+                dict_writer.writerow({k:v for k,v in dicti.items()})
+        print("Data loaded in the file")
+
 # This is the main function which create the object of Gsmarena class and call the save_specificiton_to_file function.
-i = 1
-while i == 1:
-    if __name__ == "__main__":
-        obj = Gsmarena()
-        try:
-            obj.save_specification_to_file()
-        except KeyboardInterrupt:
-            print("File has been stopped due to KeyBoard Interruption.")
+
+if __name__ == "__main__":
+    obj = Gsmarena()
+    try:
+        # obj.save_specification_to_file()
+        obj.search_and_save()
+    except KeyboardInterrupt:
+        print("File has been stopped due to KeyBoard Interruption.")
